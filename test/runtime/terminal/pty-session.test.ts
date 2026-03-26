@@ -273,4 +273,44 @@ describe("PtySession", () => {
 
 		expect(() => session.write("hello")).toThrow("permission denied");
 	});
+
+	it("ignores resize requests after the PTY exits", () => {
+		setPlatform("win32");
+		const ptyProcess = createMockPtyProcess();
+		ptyMocks.spawn.mockReturnValue(ptyProcess);
+
+		const session = PtySession.spawn({
+			binary: "codex",
+			args: [],
+			cwd: "C:/repo",
+			cols: 120,
+			rows: 40,
+		});
+
+		const exitListener = ptyProcess.onExit.mock.calls[0]?.[0] as ((event: { exitCode: number }) => void) | undefined;
+		expect(typeof exitListener).toBe("function");
+		exitListener?.({ exitCode: 1 });
+
+		expect(() => session.resize(120, 40)).not.toThrow();
+		expect(ptyProcess.resize).not.toHaveBeenCalled();
+	});
+
+	it("ignores node-pty resize errors for already exited sessions", () => {
+		setPlatform("win32");
+		const ptyProcess = createMockPtyProcess();
+		ptyProcess.resize.mockImplementation(() => {
+			throw new Error("Cannot resize a pty that has already exited");
+		});
+		ptyMocks.spawn.mockReturnValue(ptyProcess);
+
+		const session = PtySession.spawn({
+			binary: "codex",
+			args: [],
+			cwd: "C:/repo",
+			cols: 120,
+			rows: 40,
+		});
+
+		expect(() => session.resize(120, 40)).not.toThrow();
+	});
 });

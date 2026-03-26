@@ -44,7 +44,7 @@ function isIgnorablePtyResizeError(error: unknown): boolean {
 	if (code === "EIO" || code === "EBADF") {
 		return true;
 	}
-	return error.message.toLowerCase().includes("already exited");
+	return /already exited/i.test(error.message);
 }
 
 function terminatePtyProcess(ptyProcess: pty.IPty): void {
