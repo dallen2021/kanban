@@ -40,6 +40,12 @@ interface CodexWrapperArgs {
 	agentArgs: string[];
 }
 
+export interface CodexWrapperSpawnLaunch {
+	binary: string;
+	args: string[];
+	shell: boolean;
+}
+
 interface CodexWatcherState {
 	lastTurnId: string;
 	lastApprovalId: string;
@@ -492,6 +498,14 @@ function appendMetadataFlags(args: string[], metadata?: Partial<RuntimeTaskHookA
 		args.push("--notification-type", metadata.notificationType);
 	}
 	return args;
+}
+
+export function resolveCodexWrapperSpawnLaunch(realBinary: string, agentArgs: string[]): CodexWrapperSpawnLaunch {
+	return {
+		binary: realBinary,
+		args: [...agentArgs],
+		shell: process.platform === "win32",
+	};
 }
 
 function getString(value: unknown): string {
@@ -1027,9 +1041,15 @@ async function runCodexWrapperSubcommand(wrapperArgs: CodexWrapperArgs): Promise
 		}
 	}
 
-	const child = spawn(wrapperArgs.realBinary, buildCodexWrapperChildArgs(wrapperArgs.agentArgs, shouldWatchSessionLog), {
+	const childLaunch = resolveCodexWrapperSpawnLaunch(
+		wrapperArgs.realBinary,
+		buildCodexWrapperChildArgs(wrapperArgs.agentArgs, shouldWatchSessionLog),
+	);
+
+	const child = spawn(childLaunch.binary, childLaunch.args, {
 		stdio: "inherit",
 		env: childEnv,
+		shell: childLaunch.shell,
 	});
 
 	const forwardSignal = (signal: NodeJS.Signals) => {
