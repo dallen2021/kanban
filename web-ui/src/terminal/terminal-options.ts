@@ -21,7 +21,9 @@ export function createKanbanTerminalOptions({
 		allowProposedApi: true,
 		allowTransparency: false,
 		convertEol: false,
-		cursorBlink: true,
+		// Embedded agent terminals redraw frequently, especially Codex's sidebar TUI.
+		// Keeping the xterm cursor static reduces the "sparkling cursor" effect.
+		cursorBlink: false,
 		cursorStyle: "block",
 		disableStdin: false,
 		fontFamily: TERMINAL_FONT_FAMILY,
