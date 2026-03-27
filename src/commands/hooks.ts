@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { access, open, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { createTRPCProxyClient, httpBatchLink, TRPCClientError } from "@trpc/client";
 import type { Command } from "commander";
 
@@ -500,11 +501,110 @@ function appendMetadataFlags(args: string[], metadata?: Partial<RuntimeTaskHookA
 	return args;
 }
 
+function getWindowsPathEntries(): string[] {
+	const rawPath = process.env.PATH ?? process.env.Path ?? "";
+	return rawPath
+		.split(delimiter)
+		.map((entry) => entry.trim())
+		.filter((entry) => entry.length > 0);
+}
+
+function resolveWindowsSearchCandidates(binary: string): string[] {
+	const trimmed = binary.trim();
+	if (!trimmed) {
+		return [];
+	}
+	const extension = extname(trimmed).toLowerCase();
+	if (extension) {
+		return [trimmed];
+	}
+	return [`${trimmed}.exe`, `${trimmed}.cmd`, `${trimmed}.bat`, `${trimmed}.com`, trimmed];
+}
+
+function resolveWindowsBinaryPath(binary: string): string | null {
+	const trimmed = binary.trim();
+	if (!trimmed) {
+		return null;
+	}
+	const hasPathSeparator = trimmed.includes("\\") || trimmed.includes("/");
+	const directCandidates = resolveWindowsSearchCandidates(trimmed);
+	if (hasPathSeparator || isAbsolute(trimmed)) {
+		for (const candidate of directCandidates) {
+			const absoluteCandidate = resolve(candidate);
+			if (existsSync(absoluteCandidate)) {
+				return absoluteCandidate;
+			}
+		}
+		return null;
+	}
+	for (const pathEntry of getWindowsPathEntries()) {
+		for (const candidate of directCandidates) {
+			const resolvedCandidate = join(pathEntry, candidate);
+			if (existsSync(resolvedCandidate)) {
+				return resolvedCandidate;
+			}
+		}
+	}
+	return null;
+}
+
+function tryResolveNpmCmdShimLaunch(
+	resolvedBinaryPath: string,
+	args: string[],
+): { binary: string; args: string[] } | null {
+	if (extname(resolvedBinaryPath).toLowerCase() !== ".cmd") {
+		return null;
+	}
+	let content: string;
+	try {
+		content = readFileSync(resolvedBinaryPath, "utf8");
+	} catch {
+		return null;
+	}
+	const scriptMatch = content.match(/"%dp0%\\([^"\r\n]+?\.js)"/i);
+	if (!scriptMatch) {
+		return null;
+	}
+	const wrapperDir = resolve(resolvedBinaryPath, "..");
+	const bundledNodePath = join(wrapperDir, "node.exe");
+	const nodeBinary = existsSync(bundledNodePath) ? bundledNodePath : "node";
+	const scriptRelativePath = scriptMatch[1]?.replaceAll("\\", "/");
+	if (!scriptRelativePath) {
+		return null;
+	}
+	const scriptPath = resolve(wrapperDir, scriptRelativePath);
+	return {
+		binary: nodeBinary,
+		args: [scriptPath, ...args],
+	};
+}
+
 export function resolveCodexWrapperSpawnLaunch(realBinary: string, agentArgs: string[]): CodexWrapperSpawnLaunch {
+	if (process.platform === "win32") {
+		const resolvedBinaryPath = resolveWindowsBinaryPath(realBinary);
+		if (resolvedBinaryPath) {
+			const extension = extname(resolvedBinaryPath).toLowerCase();
+			if (extension === ".exe" || extension === ".com") {
+				return {
+					binary: resolvedBinaryPath,
+					args: [...agentArgs],
+					shell: false,
+				};
+			}
+			const npmShimLaunch = tryResolveNpmCmdShimLaunch(resolvedBinaryPath, agentArgs);
+			if (npmShimLaunch) {
+				return {
+					binary: npmShimLaunch.binary,
+					args: npmShimLaunch.args,
+					shell: false,
+				};
+			}
+		}
+	}
 	return {
 		binary: realBinary,
 		args: [...agentArgs],
-		shell: process.platform === "win32",
+		shell: false,
 	};
 }
 
