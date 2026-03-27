@@ -711,6 +711,18 @@ body.kb-dependency-link-mode {
 	border-radius: 999px;
 }
 
+.kb-terminal-container .xterm .xterm-helper-textarea {
+	/*
+		Firefox on Windows can still paint the native caret for xterm's hidden
+		input textarea while Codex rapidly moves the terminal cursor around.
+		Force the browser caret fully transparent so only xterm's rendered cursor
+		remains visible.
+	*/
+	caret-color: transparent !important;
+	color: transparent !important;
+	background: transparent !important;
+}
+
 /* -- Animations -- */
 
 @keyframes kb-overlay-show {
