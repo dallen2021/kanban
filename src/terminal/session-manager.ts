@@ -442,6 +442,11 @@ export class TerminalSessionManager implements TerminalSessionService {
 			terminalProtocolFilter: createTerminalProtocolFilterState({
 				interceptOsc11BackgroundQueries: true,
 				suppressDeviceAttributeQueries: request.agentId === "droid",
+				// Codex emits rapid cursor hide/show updates while repainting on Windows.
+				// Embedded xterm already owns the visible caret, so stripping these
+				// transport-level toggles prevents the browser-side cursor flicker
+				// without affecting the actual prompt text.
+				suppressCursorVisibilityControls: process.platform === "win32" && request.agentId === "codex",
 			}),
 			onSessionCleanup: launch.cleanup ?? null,
 			detectOutputTransition: launch.detectOutputTransition ?? null,

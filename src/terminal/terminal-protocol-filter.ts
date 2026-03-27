@@ -9,11 +9,13 @@ export interface TerminalProtocolFilterState {
 	pendingChunk: Buffer | null;
 	interceptOsc11BackgroundQueries: boolean;
 	suppressDeviceAttributeQueries: boolean;
+	suppressCursorVisibilityControls: boolean;
 }
 
 export interface CreateTerminalProtocolFilterStateOptions {
 	interceptOsc11BackgroundQueries?: boolean;
 	suppressDeviceAttributeQueries?: boolean;
+	suppressCursorVisibilityControls?: boolean;
 }
 
 export interface FilterTerminalProtocolOutputOptions {
@@ -27,6 +29,7 @@ export function createTerminalProtocolFilterState(
 		pendingChunk: null,
 		interceptOsc11BackgroundQueries: options.interceptOsc11BackgroundQueries ?? false,
 		suppressDeviceAttributeQueries: options.suppressDeviceAttributeQueries ?? false,
+		suppressCursorVisibilityControls: options.suppressCursorVisibilityControls ?? false,
 	};
 }
 
@@ -48,6 +51,19 @@ function shouldSuppressDeviceAttributeQuery(
 	}
 	const body = sequenceBody.toString("utf8");
 	return body === "" || body === "0" || body === ">" || body === ">0";
+}
+
+function shouldSuppressCursorVisibilityControl(
+	state: TerminalProtocolFilterState,
+	sequenceBody: Buffer,
+	finalByte: number,
+): boolean {
+	if (!state.suppressCursorVisibilityControls || finalByte !== 0x68 && finalByte !== 0x6c) {
+		return false;
+	}
+
+	const body = sequenceBody.toString("utf8");
+	return body === "?25";
 }
 
 export function filterTerminalProtocolOutput(
@@ -145,7 +161,11 @@ export function filterTerminalProtocolOutput(
 			}
 
 			const finalByte = source[finalIndex] as number;
-			if (!shouldSuppressDeviceAttributeQuery(state, source.subarray(sequenceStart + 2, finalIndex), finalByte)) {
+			const sequenceBody = source.subarray(sequenceStart + 2, finalIndex);
+			if (
+				!shouldSuppressDeviceAttributeQuery(state, sequenceBody, finalByte) &&
+				!shouldSuppressCursorVisibilityControl(state, sequenceBody, finalByte)
+			) {
 				segments.push(source.subarray(sequenceStart, finalIndex + 1));
 			}
 

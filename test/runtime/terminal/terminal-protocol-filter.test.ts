@@ -28,6 +28,27 @@ describe("terminal protocol filter", () => {
 		expect(filtered.toString("utf8")).toBe("\u001b[c");
 	});
 
+	it("suppresses cursor visibility controls when enabled", () => {
+		const state = createTerminalProtocolFilterState({
+			suppressCursorVisibilityControls: true,
+		});
+
+		const filtered = filterTerminalProtocolOutput(
+			state,
+			Buffer.from("before\u001b[?25l middle \u001b[?25h after", "utf8"),
+		);
+
+		expect(filtered.toString("utf8")).toBe("before middle  after");
+	});
+
+	it("preserves cursor visibility controls when suppression is disabled", () => {
+		const state = createTerminalProtocolFilterState();
+
+		const filtered = filterTerminalProtocolOutput(state, Buffer.from("\u001b[?25l\u001b[?25h", "utf8"));
+
+		expect(filtered.toString("utf8")).toBe("\u001b[?25l\u001b[?25h");
+	});
+
 	it("handles split device attribute queries across chunks", () => {
 		const state = createTerminalProtocolFilterState({
 			suppressDeviceAttributeQueries: true,
@@ -67,6 +88,19 @@ describe("terminal protocol filter", () => {
 
 		const firstChunk = filterTerminalProtocolOutput(state, Buffer.from("before\u001b", "utf8"));
 		const secondChunk = filterTerminalProtocolOutput(state, Buffer.from("[cafter", "utf8"));
+
+		expect(firstChunk.toString("utf8")).toBe("before");
+		expect(secondChunk.toString("utf8")).toBe("after");
+		expect(state.pendingChunk).toBeNull();
+	});
+
+	it("handles cursor visibility controls split between ESC and the CSI introducer", () => {
+		const state = createTerminalProtocolFilterState({
+			suppressCursorVisibilityControls: true,
+		});
+
+		const firstChunk = filterTerminalProtocolOutput(state, Buffer.from("before\u001b", "utf8"));
+		const secondChunk = filterTerminalProtocolOutput(state, Buffer.from("[?25lafter", "utf8"));
 
 		expect(firstChunk.toString("utf8")).toBe("before");
 		expect(secondChunk.toString("utf8")).toBe("after");
