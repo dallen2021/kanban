@@ -1,3 +1,6 @@
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ptyMocks = vi.hoisted(() => ({
@@ -13,6 +16,8 @@ import { PtySession } from "../../../src/terminal/pty-session.js";
 const originalPlatform = process.platform;
 const originalComSpec = process.env.ComSpec;
 const originalCOMSPEC = process.env.COMSPEC;
+const originalPath = process.env.PATH;
+const originalPathLower = process.env.Path;
 
 function setPlatform(value: NodeJS.Platform): void {
 	Object.defineProperty(process, "platform", {
@@ -63,6 +68,16 @@ describe("PtySession", () => {
 		} else {
 			process.env.COMSPEC = originalCOMSPEC;
 		}
+		if (originalPath === undefined) {
+			delete process.env.PATH;
+		} else {
+			process.env.PATH = originalPath;
+		}
+		if (originalPathLower === undefined) {
+			delete process.env.Path;
+		} else {
+			process.env.Path = originalPathLower;
+		}
 	});
 
 	afterEach(() => {
@@ -72,6 +87,8 @@ describe("PtySession", () => {
 	it("launches through cmd shell on Windows", () => {
 		setPlatform("win32");
 		process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+		process.env.PATH = "";
+		delete process.env.Path;
 		const ptyProcess = createMockPtyProcess();
 		ptyMocks.spawn.mockReturnValue(ptyProcess);
 
@@ -96,6 +113,8 @@ describe("PtySession", () => {
 	it("does not over-quote bare executables on Windows", () => {
 		setPlatform("win32");
 		process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+		process.env.PATH = "";
+		delete process.env.Path;
 		const ptyProcess = createMockPtyProcess();
 		ptyMocks.spawn.mockReturnValue(ptyProcess);
 
@@ -114,6 +133,8 @@ describe("PtySession", () => {
 	it("preserves full prompt text on Windows", () => {
 		setPlatform("win32");
 		process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+		process.env.PATH = "";
+		delete process.env.Path;
 		const ptyProcess = createMockPtyProcess();
 		ptyMocks.spawn.mockReturnValue(ptyProcess);
 
@@ -138,6 +159,8 @@ describe("PtySession", () => {
 
 	it("does not use cmd shell outside Windows", () => {
 		setPlatform("darwin");
+		process.env.PATH = "";
+		delete process.env.Path;
 		const ptyProcess = createMockPtyProcess();
 		ptyMocks.spawn.mockReturnValue(ptyProcess);
 
@@ -156,6 +179,8 @@ describe("PtySession", () => {
 	it("does not wrap cmd itself on Windows", () => {
 		setPlatform("win32");
 		process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+		process.env.PATH = "";
+		delete process.env.Path;
 		const ptyProcess = createMockPtyProcess();
 		ptyMocks.spawn.mockReturnValue(ptyProcess);
 
@@ -234,6 +259,8 @@ describe("PtySession", () => {
 
 	it("ignores EIO write errors", () => {
 		setPlatform("darwin");
+		process.env.PATH = "";
+		delete process.env.Path;
 		const ptyProcess = createMockPtyProcess();
 		ptyProcess.write.mockImplementation(() => {
 			const error = new Error("i/o error") as NodeJS.ErrnoException;
@@ -255,6 +282,8 @@ describe("PtySession", () => {
 
 	it("rethrows non-ignorable write errors", () => {
 		setPlatform("darwin");
+		process.env.PATH = "";
+		delete process.env.Path;
 		const ptyProcess = createMockPtyProcess();
 		ptyProcess.write.mockImplementation(() => {
 			const error = new Error("permission denied") as NodeJS.ErrnoException;
@@ -276,6 +305,8 @@ describe("PtySession", () => {
 
 	it("ignores resize requests after the PTY exits", () => {
 		setPlatform("win32");
+		process.env.PATH = "";
+		delete process.env.Path;
 		const ptyProcess = createMockPtyProcess();
 		ptyMocks.spawn.mockReturnValue(ptyProcess);
 
@@ -297,6 +328,8 @@ describe("PtySession", () => {
 
 	it("ignores node-pty resize errors for already exited sessions", () => {
 		setPlatform("win32");
+		process.env.PATH = "";
+		delete process.env.Path;
 		const ptyProcess = createMockPtyProcess();
 		ptyProcess.resize.mockImplementation(() => {
 			throw new Error("Cannot resize a pty that has already exited");
@@ -312,5 +345,66 @@ describe("PtySession", () => {
 		});
 
 		expect(() => session.resize(120, 40)).not.toThrow();
+	});
+
+	it("launches npm cmd shims through node directly on Windows", () => {
+		setPlatform("win32");
+		process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+		const tempDir = mkdtempSync(join(tmpdir(), "kanban-pty-shim-"));
+		const nodePath = join(tempDir, "node.exe");
+		const shimPath = join(tempDir, "codex.cmd");
+		mkdirSync(join(tempDir, "node_modules", "@openai", "codex", "bin"), { recursive: true });
+		writeFileSync(nodePath, "");
+		writeFileSync(
+			shimPath,
+			'@ECHO off\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n',
+		);
+		process.env.PATH = tempDir;
+		delete process.env.Path;
+		const ptyProcess = createMockPtyProcess();
+		ptyMocks.spawn.mockReturnValue(ptyProcess);
+
+		PtySession.spawn({
+			binary: "codex",
+			args: ["hello world"],
+			cwd: "C:/repo",
+			env: { PATH: tempDir },
+			cols: 120,
+			rows: 40,
+		});
+
+		expect(ptyMocks.spawn).toHaveBeenCalledTimes(1);
+		expect(ptyMocks.spawn.mock.calls[0]?.[0]).toBe(nodePath);
+		expect(ptyMocks.spawn.mock.calls[0]?.[1]).toEqual([
+			join(tempDir, "node_modules", "@openai", "codex", "bin", "codex.js"),
+			"hello world",
+		]);
+	});
+
+	it("prefers real executables over npm shims on Windows", () => {
+		setPlatform("win32");
+		process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+		const tempDir = mkdtempSync(join(tmpdir(), "kanban-pty-exe-"));
+		const exePath = join(tempDir, "claude.exe");
+		const shimPath = join(tempDir, "claude.cmd");
+		writeFileSync(exePath, "");
+		writeFileSync(shimPath, "@ECHO off\r\n");
+		process.env.PATH = tempDir;
+		delete process.env.Path;
+		const ptyProcess = createMockPtyProcess();
+		ptyMocks.spawn.mockReturnValue(ptyProcess);
+
+		PtySession.spawn({
+			binary: "claude",
+			args: ["hello world"],
+			cwd: "C:/repo",
+			env: { PATH: tempDir },
+			cols: 120,
+			rows: 40,
+		});
+
+		expect(ptyMocks.spawn).toHaveBeenCalledTimes(1);
+		expect(ptyMocks.spawn.mock.calls[0]?.[0]).toBe(exePath);
+		expect(ptyMocks.spawn.mock.calls[0]?.[1]).toEqual(["hello world"]);
 	});
 });

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import * as pty from "node-pty";
 
 const MAX_HISTORY_BYTES = 1024 * 1024;
@@ -64,6 +66,84 @@ function resolveWindowsComSpec(): string {
 	return comSpec || "cmd.exe";
 }
 
+function getWindowsPathEntries(env?: Record<string, string | undefined>): string[] {
+	const rawPath = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
+	return rawPath
+		.split(delimiter)
+		.map((entry) => entry.trim())
+		.filter((entry) => entry.length > 0);
+}
+
+function resolveWindowsSearchCandidates(binary: string): string[] {
+	const trimmed = binary.trim();
+	if (!trimmed) {
+		return [];
+	}
+	const extension = extname(trimmed).toLowerCase();
+	if (extension) {
+		return [trimmed];
+	}
+	return [`${trimmed}.exe`, `${trimmed}.cmd`, `${trimmed}.bat`, `${trimmed}.com`, trimmed];
+}
+
+function resolveWindowsBinaryPath(binary: string, env?: Record<string, string | undefined>): string | null {
+	const trimmed = binary.trim();
+	if (!trimmed) {
+		return null;
+	}
+	const hasPathSeparator = trimmed.includes("\\") || trimmed.includes("/");
+	const directCandidates = resolveWindowsSearchCandidates(trimmed);
+	if (hasPathSeparator || isAbsolute(trimmed)) {
+		for (const candidate of directCandidates) {
+			const absoluteCandidate = resolve(candidate);
+			if (existsSync(absoluteCandidate)) {
+				return absoluteCandidate;
+			}
+		}
+		return null;
+	}
+	for (const pathEntry of getWindowsPathEntries(env)) {
+		for (const candidate of directCandidates) {
+			const resolvedCandidate = join(pathEntry, candidate);
+			if (existsSync(resolvedCandidate)) {
+				return resolvedCandidate;
+			}
+		}
+	}
+	return null;
+}
+
+function tryResolveNpmCmdShimLaunch(
+	resolvedBinaryPath: string,
+	args: string[],
+): { binary: string; args: string[] } | null {
+	if (extname(resolvedBinaryPath).toLowerCase() !== ".cmd") {
+		return null;
+	}
+	let content: string;
+	try {
+		content = readFileSync(resolvedBinaryPath, "utf8");
+	} catch {
+		return null;
+	}
+	const scriptMatch = content.match(/"%dp0%\\([^"\r\n]+?\.js)"/i);
+	if (!scriptMatch) {
+		return null;
+	}
+	const wrapperDir = resolve(resolvedBinaryPath, "..");
+	const bundledNodePath = join(wrapperDir, "node.exe");
+	const nodeBinary = existsSync(bundledNodePath) ? bundledNodePath : "node";
+	const scriptRelativePath = scriptMatch[1]?.replaceAll("\\", "/");
+	if (!scriptRelativePath) {
+		return null;
+	}
+	const scriptPath = resolve(wrapperDir, scriptRelativePath);
+	return {
+		binary: nodeBinary,
+		args: [scriptPath, ...args],
+	};
+}
+
 function escapeWindowsCommand(value: string): string {
 	return value.replace(WINDOWS_CMD_META_CHARS_REGEXP, "^$1");
 }
@@ -102,6 +182,25 @@ function shouldUseWindowsShellLaunch(binary: string): boolean {
 	return normalized !== resolveWindowsComSpec().toLowerCase();
 }
 
+function resolveWindowsDirectLaunch(
+	binary: string,
+	args: string[],
+	env?: Record<string, string | undefined>,
+): { binary: string; args: string[] } | null {
+	const resolvedBinaryPath = resolveWindowsBinaryPath(binary, env);
+	if (!resolvedBinaryPath) {
+		return null;
+	}
+	const extension = extname(resolvedBinaryPath).toLowerCase();
+	if (extension === ".exe" || extension === ".com") {
+		return {
+			binary: resolvedBinaryPath,
+			args,
+		};
+	}
+	return tryResolveNpmCmdShimLaunch(resolvedBinaryPath, args);
+}
+
 export class PtySession {
 	private readonly ptyProcess: pty.IPty;
 	private readonly outputHistory: Buffer[] = [];
@@ -137,11 +236,13 @@ export class PtySession {
 	static spawn({ binary, args = [], cwd, env, cols, rows, onData, onExit }: SpawnPtySessionRequest): PtySession {
 		const normalizedArgs = typeof args === "string" ? [args] : args;
 		const terminalName = env?.TERM?.trim() || process.env.TERM?.trim() || "xterm-256color";
-		const useWindowsShellLaunch = shouldUseWindowsShellLaunch(binary);
-		const spawnBinary = useWindowsShellLaunch ? resolveWindowsComSpec() : binary;
-		const spawnArgs = useWindowsShellLaunch
-			? buildWindowsCmdArgsCommandLine(binary, normalizedArgs)
-			: normalizedArgs;
+		const directWindowsLaunch =
+			process.platform === "win32" ? resolveWindowsDirectLaunch(binary, normalizedArgs, env) : null;
+		const useWindowsShellLaunch =
+			!directWindowsLaunch && shouldUseWindowsShellLaunch(binary);
+		const spawnBinary = directWindowsLaunch?.binary ?? (useWindowsShellLaunch ? resolveWindowsComSpec() : binary);
+		const spawnArgs = directWindowsLaunch?.args ??
+			(useWindowsShellLaunch ? buildWindowsCmdArgsCommandLine(binary, normalizedArgs) : normalizedArgs);
 		const ptyOptions: pty.IPtyForkOptions = {
 			name: terminalName,
 			cwd,
