@@ -15,7 +15,8 @@ import type {
 import { clearTerminalGeometry, reportTerminalGeometry } from "@/terminal/terminal-geometry-registry";
 import { createKanbanTerminalOptions } from "@/terminal/terminal-options";
 import { appendTerminalHeuristicText, hasInterruptAcknowledgement, hasLikelyShellPrompt } from "@/terminal/terminal-prompt-heuristics";
-import { isMacPlatform } from "@/utils/platform";
+import { shouldEnableTerminalWebgl } from "@/terminal/renderer-strategy";
+import { isMacPlatform, isWindowsPlatform } from "@/utils/platform";
 
 const SHIFT_ENTER_SEQUENCE = "\n";
 const RESIZE_DEBOUNCE_MS = 50;
@@ -170,14 +171,20 @@ class PersistentTerminal {
 			return true;
 		});
 
-		try {
-			const webglAddon = new WebglAddon();
-			webglAddon.onContextLoss(() => {
-				webglAddon.dispose();
-			});
-			this.terminal.loadAddon(webglAddon);
-		} catch {
-			// Fall back to the default renderer when WebGL is unavailable.
+		if (
+			shouldEnableTerminalWebgl({
+				isWindowsPlatform,
+			})
+		) {
+			try {
+				const webglAddon = new WebglAddon();
+				webglAddon.onContextLoss(() => {
+					webglAddon.dispose();
+				});
+				this.terminal.loadAddon(webglAddon);
+			} catch {
+				// Fall back to the default renderer when WebGL is unavailable.
+			}
 		}
 
 		this.ensureConnected();
